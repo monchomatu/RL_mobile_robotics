@@ -156,6 +156,25 @@ class DQNAgent:
         """
         with open(filepath, 'wb') as f:
             pickle.dump(self.q_network, f)
+    
+    # --- Alias para compatibilidad con train_node ---
+    def act(self, state, training=True):
+        # El parámetro 'training' es para que el test_node 
+        # pueda desactivar la exploración si lo necesita
+        if not training:
+            # Si no estamos entrenando, epsilon es 0 (solo la mejor acción)
+            temp_epsilon = self.epsilon
+            self.epsilon = 0
+            action = self.select_action(state)
+            self.epsilon = temp_epsilon
+            return action
+        return self.select_action(state)
+
+    def remember(self, state, action, reward, next_state, done):
+        self.store_transition(state, action, reward, next_state, done)
+
+    def replay(self):
+        return self.train_step()
 
     def load(self, filepath: str):
         """
