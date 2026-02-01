@@ -4,6 +4,7 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Empty
+from rl_stage_env.state_processor import StateProcessor
 import numpy as np
 from typing import Tuple
 import math
@@ -20,6 +21,7 @@ class TurtleBot3Env(Node):
                                                   self.scan_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom',
                                                   self.odom_callback, 10)
+        self.state_processor = StateProcessor(n_lidar_bins=10)
         
         # Gazebo service for resetting world
         self.reset_world_client = self.create_client(Empty, '/reset_world')
