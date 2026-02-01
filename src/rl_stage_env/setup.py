@@ -24,7 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            "reset_stage = rl_stage_env.reset_stage:main"
+            "reset_stage = rl_stage_env.reset_stage:main",
+            'train_node = rl_stage_env.train_node:main'
         ],
     },
 )
