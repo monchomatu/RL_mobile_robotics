@@ -216,4 +216,9 @@ class TurtleBot3Env(Node):
     def get_state(self) -> np.ndarray:
         """Get current state (must be implemented with StateProcessor)"""
         # This will be combined with StateProcessor in the training node
-        return None
+        return self.state_processor.get_state(
+            self.scan_data, 
+            self.position, 
+            self.goal_position, 
+            self.yaw
+        )
