@@ -12,6 +12,7 @@ basado en Deep Q-Learning (DQN), implementado en ROS 2 y simulado en Stage.
 
 ## Instalación y configuración del entorno
 
+```bash
 git clone https://github.com/monchomatu/RL_mobile_robotics.git
 cd RL_mobile_robotics
 python3 -m venv .venv
@@ -22,6 +23,8 @@ export PYTHONPATH=$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH
 source install/setup.bash
 colcon build
 source install/setup.bash
+
+```
 
 ## Cada vez que se desee iniciar una nueva sesión en terminal se deberá realizar
 
