@@ -22,6 +22,8 @@ class StateProcessor:
         Returns:
             Array of shape (n_lidar_bins,) with min distances per sector
         """
+        if scan_data is None or len(scan_data) == 0:
+            return np.ones(self.n_lidar_bins)
         scan_array = np.array(scan_data)
         
         # Replace inf values with max range

@@ -17,10 +17,10 @@ class DQNTrainingNode(Node):
         super().__init__('dqn_training_node')
         
         # Training parameters
-        self.n_episodes = 500
+        self.n_episodes = 200
         self.max_steps_per_episode = 500
         self.state_size = 12  # 10 LiDAR bins + 2 goal info
-        self.action_size = 5
+        self.action_size = 6
         
         # Initialize components
         self.env = TurtleBot3Env()

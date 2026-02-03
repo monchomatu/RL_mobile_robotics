@@ -1,23 +1,14 @@
-# Base DQNAgent – subject to integration changes
-
 import numpy as np
 import random
 import pickle
 from collections import deque
 from copy import deepcopy
-
 from sklearn.neural_network import MLPRegressor
 
 
 class DQNAgent:
     """
     Deep Q-Network agent (using sklearn MLPRegressor)
-
-    This class is independent of ROS.
-    It only handles:
-    - Action selection (epsilon-greedy)
-    - Experience replay
-    - Q-network and target network updates
     """
 
     def __init__(
@@ -30,8 +21,9 @@ class DQNAgent:
         epsilon_decay: float = 0.995,
         learning_rate: float = 0.001,
         batch_size: int = 64,
-        memory_size: int = 2000,
-        hidden_layers=(64, 64),
+        memory_size: int = 10000,
+        hidden_layers=(128, 128),
+        target_update_freq: int = 100,   # >>> AÑADIDO
     ):
         # --- Dimensions ---
         self.state_size = state_size
@@ -44,6 +36,10 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay
         self.learning_rate = learning_rate
         self.batch_size = batch_size
+        self.target_update_freq = target_update_freq  # >>> AÑADIDO
+
+        # --- Step counter ---
+        self.step_count = 0  # >>> AÑADIDO
 
         # --- Replay Memory ---
         self.memory = deque(maxlen=memory_size)
@@ -54,26 +50,25 @@ class DQNAgent:
             activation='relu',
             solver='adam',
             learning_rate_init=self.learning_rate,
-            max_iter=1,           # Important: train step-by-step
-            warm_start=True       # Do not reinitialize weights
+            max_iter=1,
+            warm_start=True,
+            random_state=42
         )
 
         # --- Target Network ---
         self.target_network = deepcopy(self.q_network)
 
-        # Initialize networks with dummy input
-        dummy_state = np.zeros((1, self.state_size))
-        self.q_network.fit(dummy_state, np.zeros((1, self.action_size)))
-        self.target_network.fit(dummy_state, np.zeros((1, self.action_size)))
+        # Initialize networks with dummy input (mejor inicialización)
+        dummy_X = np.random.randn(1, self.state_size)     # >>> CAMBIO
+        dummy_y = np.random.randn(1, self.action_size)    # >>> CAMBIO
+        self.q_network.fit(dummy_X, dummy_y)
+        self.target_network.fit(dummy_X, dummy_y)
 
     # ==========================================================
     # Action Selection
     # ==========================================================
 
     def select_action(self, state: np.ndarray) -> int:
-        """
-        Select an action using epsilon-greedy policy.
-        """
         if np.random.rand() < self.epsilon:
             return random.randrange(self.action_size)
 
@@ -93,9 +88,6 @@ class DQNAgent:
         next_state: np.ndarray,
         done: bool
     ):
-        """
-        Store experience in replay buffer.
-        """
         self.memory.append((state, action, reward, next_state, done))
 
     # ==========================================================
@@ -103,11 +95,8 @@ class DQNAgent:
     # ==========================================================
 
     def train_step(self):
-        """
-        Sample a minibatch and update Q-network.
-        """
         if len(self.memory) < self.batch_size:
-            return
+            return 0.0  # >>> AÑADIDO (loss)
 
         batch = random.sample(self.memory, self.batch_size)
 
@@ -118,32 +107,43 @@ class DQNAgent:
         dones = np.array([b[4] for b in batch])
 
         # Current Q-values
-        q_values = self.q_network.predict(states)
+        current_q = self.q_network.predict(states)
 
         # Target Q-values
-        q_next = self.target_network.predict(next_states)
-        max_q_next = np.max(q_next, axis=1)
+        next_q = self.target_network.predict(next_states)
+        max_next_q = np.max(next_q, axis=1)
+
+        target_q = current_q.copy()
 
         for i in range(self.batch_size):
             if dones[i]:
-                q_values[i, actions[i]] = rewards[i]
+                target_q[i, actions[i]] = rewards[i]
             else:
-                q_values[i, actions[i]] = rewards[i] + self.gamma * max_q_next[i]
+                target_q[i, actions[i]] = rewards[i] + self.gamma * max_next_q[i]
 
-        # Train Q-network
-        self.q_network.fit(states, q_values)
+        # >>> CAMBIO IMPORTANTE: partial_fit
+        self.q_network.partial_fit(states, target_q)
 
-        # Decay epsilon
+        # --- Loss (para logging/debug) ---
+        loss = np.mean((target_q - current_q) ** 2)  # >>> AÑADIDO
+
+        # --- Step counter ---
+        self.step_count += 1  # >>> AÑADIDO
+
+        # --- Target network update ---
+        if self.step_count % self.target_update_freq == 0:  # >>> AÑADIDO
+            self.update_target_network()
+
+        # --- Epsilon decay ---
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
+        return loss
 
     # ==========================================================
     # Target Network
     # ==========================================================
 
     def update_target_network(self):
-        """
-        Copy weights from Q-network to target network.
-        """
         self.target_network = deepcopy(self.q_network)
 
     # ==========================================================
@@ -151,20 +151,29 @@ class DQNAgent:
     # ==========================================================
 
     def save(self, filepath: str):
-        """
-        Save Q-network to disk.
-        """
+        model_data = {                      # >>> CAMBIO
+            'q_network': self.q_network,
+            'target_network': self.target_network,
+            'epsilon': self.epsilon,
+            'step_count': self.step_count,
+        }
         with open(filepath, 'wb') as f:
-            pickle.dump(self.q_network, f)
-    
-    # --- Alias para compatibilidad con train_node ---
+            pickle.dump(model_data, f)
+
+    def load(self, filepath: str):
+        with open(filepath, 'rb') as f:
+            model_data = pickle.load(f)
+
+        self.q_network = model_data['q_network']
+        self.target_network = model_data['target_network']
+        self.epsilon = model_data['epsilon']
+        self.step_count = model_data['step_count']
+
+    # --- Aliases para compatibilidad ---
     def act(self, state, training=True):
-        # El parámetro 'training' es para que el test_node 
-        # pueda desactivar la exploración si lo necesita
         if not training:
-            # Si no estamos entrenando, epsilon es 0 (solo la mejor acción)
             temp_epsilon = self.epsilon
-            self.epsilon = 0
+            self.epsilon = 0.0
             action = self.select_action(state)
             self.epsilon = temp_epsilon
             return action
@@ -175,13 +184,3 @@ class DQNAgent:
 
     def replay(self):
         return self.train_step()
-
-    def load(self, filepath: str):
-        """
-        Load Q-network from disk.
-        """
-        with open(filepath, 'rb') as f:
-            self.q_network = pickle.load(f)
-
-        self.target_network = deepcopy(self.q_network)
-

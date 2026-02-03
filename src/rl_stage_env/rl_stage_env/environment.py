@@ -9,218 +9,225 @@ import numpy as np
 from typing import Tuple
 import math
 
+
 class TurtleBot3Env(Node):
     """ROS2 Environment wrapper for TurtleBot3 navigation"""
-    
+
     def __init__(self):
         super().__init__('turtlebot3_env')
-        
-        # Publishers and Subscribers
+
+        # Publishers & Subscribers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.scan_sub = self.create_subscription(LaserScan, '/scan', 
-                                                  self.scan_callback, 10)
-        self.odom_sub = self.create_subscription(Odometry, '/odom',
-                                                  self.odom_callback, 10)
+        self.scan_sub = self.create_subscription(
+            LaserScan, '/scan', self.scan_callback, 10
+        )
+        self.odom_sub = self.create_subscription(
+            Odometry, '/odom/sim', self.odom_callback, 10
+        )
+
         self.state_processor = StateProcessor(n_lidar_bins=10)
-        
-        # Gazebo service for resetting world
-        self.reset_world_client = self.create_client(Empty, '/reset_world')
-        
-        # State variables
+
+        # Gazebo reset service
+        self.reset_world_client = self.create_client(Empty, '/reset_sim')
+
+        # Robot state
         self.scan_data = None
         self.position = (0.0, 0.0)
         self.yaw = 0.0
-        self.last_position = (0.0, 0.0)
-        
-        # Goal position (will be randomized)
+
+        # Goal
         self.goal_position = (4.0, 4.0)
-        
-        # Action space: 5 discrete actions
+        self.last_distance = None
+
+        # Action space (NO CAMBIADO)
         self.actions = {
-            0: (0.15, 0.0),    # Forward
-            1: (0.0, 0.5),     # Rotate left
-            2: (0.0, -0.5),    # Rotate right
-            3: (0.08, 0.3),    # Forward + left
-            4: (0.08, -0.3),   # Forward + right
+            0: (0.08, 0.0),     # Forward
+            1: (0.0, 0.6),      # Rotate left
+            2: (0.0, -0.6),     # Rotate right
+            3: (0.05, 0.4),     # Forward + left
+            4: (0.05, -0.4),    # Forward + right
+            5: (-0.04, 0.0),    # Backward (penalized)
         }
-        
-        self.collision_threshold = 0.2  # meters
-        self.goal_threshold = 0.3       # meters
-        
+
+        self.collision_threshold = 0.2
+        self.goal_threshold = 0.3
+
+        # --- Map limits (cave.world) ---
+        self.map_limits = {
+            'x_min': -7.5,
+            'x_max':  7.5,
+            'y_min': -7.5,
+            'y_max':  7.5,
+        }
+
+        # Goal constraints
+        self.min_goal_distance = 4.5
+
+    # ======================================================
+    # Callbacks
+    # ======================================================
+
     def scan_callback(self, msg: LaserScan):
-        """Store latest LiDAR scan"""
         self.scan_data = list(msg.ranges)
-    
+
     def odom_callback(self, msg: Odometry):
-        """Store latest odometry data"""
         self.position = (
             msg.pose.pose.position.x,
             msg.pose.pose.position.y
         )
-        
-        # Extract yaw from quaternion
-        orientation_q = msg.pose.pose.orientation
-        siny_cosp = 2 * (orientation_q.w * orientation_q.z + 
-                        orientation_q.x * orientation_q.y)
-        cosy_cosp = 1 - 2 * (orientation_q.y * orientation_q.y + 
-                            orientation_q.z * orientation_q.z)
+
+        q = msg.pose.pose.orientation
+        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         self.yaw = math.atan2(siny_cosp, cosy_cosp)
-    
+
+    # ======================================================
+    # Environment API
+    # ======================================================
+
     def step(self, action: int) -> Tuple[np.ndarray, float, bool]:
-        """
-        Execute action and return next state, reward, done
-        
-        Args:
-            action: Action index
-            
-        Returns:
-            next_state, reward, done
-        """
-        # Execute action
-        linear_vel, angular_vel = self.actions[action]
-        self.send_velocity(linear_vel, angular_vel)
-        
-        # Wait for state update
+        linear, angular = self.actions[action]
+        self.send_velocity(linear, angular)
+
         rclpy.spin_once(self, timeout_sec=0.1)
-        
-        # Check termination conditions
-        done = False
-        reward = 0.0
-        
-        # 1. Check collision
+
         if self.is_collision():
-            reward = -100.0
-            done = True
-            self.get_logger().info("Collision detected!")
-            
-        # 2. Check goal reached
-        elif self.is_goal_reached():
-            reward = 200.0
-            done = True
-            self.get_logger().info("Goal reached!")
-            
-        # 3. Ongoing reward
-        else:
-            reward = self.compute_reward(action)
-        
-        return self.get_state(), reward, done
-    
+            return self.get_state(), -100.0, True
+
+        if self.is_goal_reached():
+            self.get_logger().info("🎯 GOAL ALCANZADO")
+            return self.get_state(), 200.0, True
+
+        reward = self.compute_reward(action)
+        return self.get_state(), reward, False
+
+    def reset(self, random_goal: bool = True, episode: int = 0) -> np.ndarray:
+        self.send_velocity(0.0, 0.0)
+        self.reset_world()
+
+        # Curriculum learning: rango de goal crece con episodios
+        goal_range = min(3.5, 1.0 + episode * 0.01)
+
+        if random_goal:
+            self.goal_position = self.sample_goal_far_positive(goal_range)
+
+        # Esperar datos válidos
+        for _ in range(10):
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self.scan_data is not None:
+                break
+
+        self.last_distance = self.distance_to_goal()
+        return self.get_state()
+
+    # ======================================================
+    # Goal Sampling
+    # ======================================================
+
+    def sample_goal_far_positive(self, goal_range):
+        """
+        Sample a goal far from the robot, in +x +y direction,
+        inside map limits.
+        """
+        for _ in range(100):
+            gx = np.random.uniform(
+                max(0.5, -goal_range),
+                min(goal_range, self.map_limits['x_max'])
+            )
+            gy = np.random.uniform(
+                max(0.5, -goal_range),
+                min(goal_range, self.map_limits['y_max'])
+            )
+
+            # Distance from robot (odom origin)
+            dist = math.sqrt(gx**2 + gy**2)
+            if dist < self.min_goal_distance:
+                continue
+
+            # Inside map
+            if not (
+                self.map_limits['x_min'] <= gx <= self.map_limits['x_max'] and
+                self.map_limits['y_min'] <= gy <= self.map_limits['y_max']
+            ):
+                continue
+
+            return (gx, gy)
+
+        # Safe fallback
+        return (goal_range, goal_range)
+
+    # ======================================================
+    # Reward & Termination
+    # ======================================================
+
     def compute_reward(self, action: int) -> float:
-        """
-        Compute reward for ongoing navigation
-        
-        Reward components:
-        1. Progress toward goal (positive)
-        2. Proximity to obstacles (negative)
-        3. Action penalty (encourage efficiency)
-        """
-        # Distance to goal
         current_dist = self.distance_to_goal()
-        
-        # Progress reward (compare to last position if available)
-        if hasattr(self, 'last_distance'):
+
+        progress = 0.0
+        if self.last_distance is not None:
             progress = self.last_distance - current_dist
-            progress_reward = progress * 10.0  # Scale factor
-        else:
-            progress_reward = 0.0
-        
         self.last_distance = current_dist
-        
-        # Obstacle proximity penalty
-        min_obstacle_dist = np.min(self.scan_data) if self.scan_data else 3.5
-        if min_obstacle_dist < 0.5:
-            obstacle_penalty = -5.0 * (0.5 - min_obstacle_dist)
-        else:
-            obstacle_penalty = 0.0
-        
-        # Action penalty (encourage forward motion)
-        action_penalty = -0.01 if action in [1, 2] else 0.0  # Penalize pure rotation
-        
-        # Time penalty (encourage faster completion)
-        time_penalty = -0.1
-        
-        total_reward = progress_reward + obstacle_penalty + action_penalty + time_penalty
-        
-        return total_reward
-    
+
+        progress_reward = 15.0 * progress
+
+        obstacle_penalty = 0.0
+        min_dist = 3.5
+
+        if self.scan_data:
+            valid = [r for r in self.scan_data if np.isfinite(r)]
+            if valid:
+                min_dist = min(valid)
+
+        if min_dist < 0.25:
+            obstacle_penalty = -10.0 * (0.25 - min_dist)
+
+        action_penalty = 0.0
+        if action in [1, 2] and min_dist > 0.7:
+            action_penalty -= 0.02
+        if action == 5:
+            action_penalty -= 0.1
+
+        time_penalty = -0.01
+
+        return progress_reward + obstacle_penalty + action_penalty + time_penalty
+
     def is_collision(self) -> bool:
-        """Check if robot has collided with obstacle"""
-        if self.scan_data is None:
+        if not self.scan_data:
             return False
-        min_distance = np.min(self.scan_data)
-        return min_distance < self.collision_threshold
-    
+        valid = [r for r in self.scan_data if np.isfinite(r)]
+        return min(valid) < self.collision_threshold if valid else False
+
     def is_goal_reached(self) -> bool:
-        """Check if robot has reached goal"""
         return self.distance_to_goal() < self.goal_threshold
-    
+
     def distance_to_goal(self) -> float:
-        """Compute Euclidean distance to goal"""
         dx = self.goal_position[0] - self.position[0]
         dy = self.goal_position[1] - self.position[1]
-        return math.sqrt(dx**2 + dy**2)
-    
+        return math.sqrt(dx ** 2 + dy ** 2)
+
+    # ======================================================
+    # Helpers
+    # ======================================================
+
     def send_velocity(self, linear: float, angular: float):
-        """Send velocity command to robot"""
-        twist = Twist()
-        twist.linear.x = linear
-        twist.angular.z = angular
-        self.cmd_vel_pub.publish(twist)
-    
-    def reset(self, random_goal: bool = True) -> np.ndarray:
-        """
-        Reset environment for new episode
-        
-        Args:
-            random_goal: If True, randomize goal position
-            
-        Returns:
-            Initial state
-        """
-        # Stop robot
-        self.send_velocity(0.0, 0.0)
-        
-        # Reset Gazebo world (resets robot and environment to initial state)
-        self.reset_world()
-        
-        # Randomize goal position
-        if random_goal:
-            self.goal_position = (
-                np.random.uniform(-3.5, 3.5),
-                np.random.uniform(-3.5, 3.5)
-            )
-        
-        # Wait for state update after reset
-        rclpy.spin_once(self, timeout_sec=0.5)
-        
-        self.last_distance = self.distance_to_goal()
-        
-        return self.get_state()
-    
+        msg = Twist()
+        msg.linear.x = linear
+        msg.angular.z = angular
+        self.cmd_vel_pub.publish(msg)
+
     def reset_world(self):
-        """Reset Gazebo world using /reset_world service"""
         if not self.reset_world_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().warn('Reset world service not available')
+            self.get_logger().warn('Reset service not available')
             return
-        
-        # Create empty request
-        request = Empty.Request()
-        
-        # Call service
-        future = self.reset_world_client.call_async(request)
+
+        req = Empty.Request()
+        future = self.reset_world_client.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-        
-        if future.result() is not None:
-            self.get_logger().info('World reset successfully')
-        else:
-            self.get_logger().error('Failed to reset world')
-    
+
     def get_state(self) -> np.ndarray:
-        """Get current state (must be implemented with StateProcessor)"""
-        # This will be combined with StateProcessor in the training node
         return self.state_processor.get_state(
-            self.scan_data, 
-            self.position, 
-            self.goal_position, 
+            self.scan_data,
+            self.position,
+            self.goal_position,
             self.yaw
         )
