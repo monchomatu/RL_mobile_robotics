@@ -74,6 +74,10 @@ source install/setup.bash
 ros2 run rl_stage_env train_node.py
 ``` 
 
+A terminar el modelo se guardara en una carpeta "result_(fecha_de_modelo)"
+``` 
+
+``` 
 PASO 4: Ejecución de test node
 Repitiendo la ejecucion del stage y de reset_stage realizar lo siguiente en otra terminal:
 
