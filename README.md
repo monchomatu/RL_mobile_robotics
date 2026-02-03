@@ -74,3 +74,14 @@ source install/setup.bash
 ros2 run rl_stage_env train_node.py
 ``` 
 
+PASO 4: Ejecución de test node
+Repitiendo la ejecucion del stage y de reset_stage realizar lo siguiente en otra terminal:
+
+```bash
+cd RL_mobile_robotics
+source .venv/bin/activate
+export PYTHON_EXECUTABLE=$(which python)
+export PYTHONPATH=$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH
+source install/setup.bash
+ros2 run rl_stage_env test_node results_20260202_195959/model_final.pkl
+
