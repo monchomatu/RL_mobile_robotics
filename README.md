@@ -26,42 +26,51 @@ source install/setup.bash
 
 ```
 
-## Cada vez que se desee iniciar una nueva sesión en terminal se deberá realizar
-
+## Cada nueva sesión
+Cada vez que se desee iniciar una nueva sesión en terminal se deberá realizar:
+```bash
 source .venv/bin/activate
 export PYTHON_EXECUTABLE=$(which python)
 export PYTHONPATH=$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH
 source install/setup.bash
+```
+O se puede realizar una modificación al .venv para evitar hacer los exports cada nuevo inicio de sesión:
 
-## O se puede realizar una modificación al .venv para evitar hacer los exports cada nuevo inicio de sesión:
-
+```bash
 nano .venv/bin/activate
+```
+Al final del archivo agrega:
 
-## Al final del archivo agrega:
-
+```bash
 export PYTHON_EXECUTABLE=$(which python)
 export PYTHONPATH=$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH
+```
+## Ejecución
+PASO 1:
 
-## Para ejecutar, en la terminal escribir el comando:
-
+```bash
 ros2 launch stage_ros2 stage.launch.py
+```
+PASO 2: Ejecución de reset_stage
+En una segunda terminal:
 
-## En una segunda terminal: se ejecutará el reset_stage
-
+```bash
 cd RL_mobile_robotics
 source .venv/bin/activate
 export PYTHON_EXECUTABLE=$(which python)
 export PYTHONPATH=$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH
 source install/setup.bash
 ros2 run rl_stage_env reset_stage.py
+```
+PASO 3: Ejecución de train node
+En una tercera terminal:
 
-## En una tercera terminal: se ejecutará el train node
-
+```bash
 cd RL_mobile_robotics
 source .venv/bin/activate
 export PYTHON_EXECUTABLE=$(which python)
 export PYTHONPATH=$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH
 source install/setup.bash
 ros2 run rl_stage_env train_node.py
-
+``` 
 
